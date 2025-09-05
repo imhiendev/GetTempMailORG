@@ -1,0 +1,225 @@
+﻿using System;
+using System.IO;
+using System.Net.Sockets;
+using System.Net.Security;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Linq;
+
+namespace GetTempMailORG
+{
+    public class TlsClient : IDisposable
+    {
+        private readonly string _host;
+        private readonly JA3Fingerprint _ja3Fingerprint;
+        private readonly int _port;
+        private readonly TcpClient _tcpClient;
+        private SslStream _sslStream;
+        private readonly string proxyString;
+        private bool disposed = false;
+
+        public TlsClient(string host, int port = 443, JA3Fingerprint ja3Fingerprint = null, string proxyString = null)
+        {
+            _host = host;
+            _port = port;
+            _ja3Fingerprint = ja3Fingerprint ?? JA3Fingerprint.Default;
+            this.proxyString = proxyString;
+            _tcpClient = new TcpClient();
+        }
+
+        public void Dispose()
+        {
+            if (!disposed)
+            {
+                _sslStream?.Dispose();
+                _tcpClient?.Dispose();
+                disposed = true;
+            }
+        }
+
+        public async Task<string> SendRequestAsync(string request, TimeSpan timeout)
+        {
+            try
+            {
+                Stream baseStream;
+
+                if (!string.IsNullOrWhiteSpace(proxyString))
+                {
+                    var parts = proxyString.Split(':');
+                    if (parts.Length < 2)
+                        throw new FormatException("Invalid proxy format. Expected ip:port[:user[:pass]]");
+
+                    var proxyHost = parts[0];
+                    var proxyPort = int.Parse(parts[1]);
+                    string? username = parts.Length > 2 ? parts[2] : null;
+                    string? password = parts.Length > 3 ? parts[3] : null;
+
+                    await _tcpClient.ConnectAsync(proxyHost, proxyPort);
+                    baseStream = _tcpClient.GetStream();
+
+                    var sb = new StringBuilder();
+                    sb.AppendLine($"CONNECT {_host}:{_port} HTTP/1.1");
+                    sb.AppendLine($"Host: {_host}:{_port}");
+
+                    if (!string.IsNullOrEmpty(username) && !string.IsNullOrEmpty(password))
+                    {
+                        var credentials = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{username}:{password}"));
+                        sb.AppendLine($"Proxy-Authorization: Basic {credentials}");
+                    }
+
+                    sb.AppendLine();
+                    var connectRequest = sb.ToString();
+                    var connectRequestBytes = Encoding.ASCII.GetBytes(connectRequest);
+                    await baseStream.WriteAsync(connectRequestBytes, 0, connectRequestBytes.Length);
+
+                    using var proxyReader = new StreamReader(baseStream, Encoding.ASCII, false, leaveOpen: true);
+                    string proxyLine;
+                    bool success = false;
+                    while (!string.IsNullOrWhiteSpace(proxyLine = await proxyReader.ReadLineAsync()))
+                    {
+                        if (proxyLine.StartsWith("HTTP/1.1 200") || proxyLine.StartsWith("HTTP/1.0 200"))
+                        {
+                            success = true;
+                            break;
+                        }
+                        if (proxyLine.StartsWith("HTTP/1."))
+                        {
+                            throw new Exception($"Proxy CONNECT failed: {proxyLine}");
+                        }
+                    }
+
+                    if (!success)
+                        throw new Exception("Proxy CONNECT tunnel failed.");
+                }
+                else
+                {
+                    await _tcpClient.ConnectAsync(_host, _port);
+                    baseStream = _tcpClient.GetStream();
+                }
+
+                _sslStream = new SslStream(baseStream, false, ServerCertificateCustomValidationCallback);
+                var clientCertificates = await GetClientCertificatesAsync();
+                var applicationProtocols = _ja3Fingerprint.GetApplicationProtocols()
+                    .Select(p => new SslApplicationProtocol(Encoding.UTF8.GetBytes(p)))
+                    .ToList();
+
+                var sslClientAuthenticationOptions = new SslClientAuthenticationOptions
+                {
+                    TargetHost = _host,
+                    ClientCertificates = clientCertificates,
+                    EnabledSslProtocols = _ja3Fingerprint.GetSslProtocols(),
+                    ApplicationProtocols = applicationProtocols,
+                    EncryptionPolicy = EncryptionPolicy.RequireEncryption
+                };
+
+                using var cts = new CancellationTokenSource(timeout);
+                await _sslStream.AuthenticateAsClientAsync(sslClientAuthenticationOptions, cts.Token);
+
+                var requestBytes = Encoding.UTF8.GetBytes(request);
+                await _sslStream.WriteAsync(requestBytes, 0, requestBytes.Length);
+
+                // Read HTTP response
+                using var reader = new StreamReader(_sslStream, Encoding.UTF8, false, 8192, true);
+                
+                // Read status line
+                string statusLine = await reader.ReadLineAsync();
+                if (string.IsNullOrEmpty(statusLine) || !statusLine.StartsWith("HTTP/"))
+                {
+                    throw new Exception("Invalid HTTP response");
+                }
+
+                // Read headers
+                var headers = new StringBuilder();
+                headers.AppendLine(statusLine);
+                
+                bool isChunked = false;
+                int contentLength = -1;
+                string line;
+                
+                while (!string.IsNullOrEmpty(line = await reader.ReadLineAsync()))
+                {
+                    headers.AppendLine(line);
+                    
+                    if (line.ToLower().StartsWith("transfer-encoding: chunked"))
+                    {
+                        isChunked = true;
+                    }
+                    else if (line.ToLower().StartsWith("content-length:"))
+                    {
+                        contentLength = int.Parse(line.Substring("content-length:".Length).Trim());
+                    }
+                }
+
+                headers.AppendLine(); // Empty line between headers and body
+
+                // Read body
+                var body = new StringBuilder();
+                if (isChunked)
+                {
+                    // Handle chunked encoding
+                    while (true)
+                    {
+                        line = await reader.ReadLineAsync();
+                        if (line == null) break;
+                        
+                        if (int.TryParse(line.Trim(), System.Globalization.NumberStyles.HexNumber, null, out int chunkSize))
+                        {
+                            if (chunkSize == 0) break;
+
+                            char[] chunkBuffer = new char[chunkSize];
+                            int totalRead = 0;
+                            while (totalRead < chunkSize)
+                            {
+                                int read = await reader.ReadAsync(chunkBuffer, totalRead, chunkSize - totalRead);
+                                if (read == 0) break;
+                                totalRead += read;
+                            }
+                            body.Append(chunkBuffer, 0, totalRead);
+                            await reader.ReadLineAsync(); // Skip \r\n after chunk
+                        }
+                    }
+                }
+                else if (contentLength >= 0)
+                {
+                    // Read by Content-Length
+                    char[] buffer = new char[contentLength];
+                    int totalRead = 0;
+                    while (totalRead < contentLength)
+                    {
+                        int read = await reader.ReadAsync(buffer, totalRead, contentLength - totalRead);
+                        if (read == 0) break;
+                        totalRead += read;
+                    }
+                    body.Append(buffer, 0, totalRead);
+                }
+                else
+                {
+                    // Read until end (fallback)
+                    string remainingContent = await reader.ReadToEndAsync();
+                    body.Append(remainingContent);
+                }
+
+                return headers.ToString() + body.ToString();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"TlsClient Error: {ex.Message}");
+                throw;
+            }
+        }
+
+        private async Task<X509CertificateCollection> GetClientCertificatesAsync()
+        {
+            var certificates = new X509CertificateCollection();
+            return certificates;
+        }
+
+        private bool ServerCertificateCustomValidationCallback(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors)
+        {
+            return true; // Accept all certificates for bypass
+        }
+    }
+}

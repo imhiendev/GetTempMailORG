@@ -1,0 +1,23 @@
+﻿using static GetTempMailORG.TempMail;
+
+namespace GetTempMailORG
+{
+    internal class Program
+    {
+        static async Task Main(string[] args)
+        {
+            using (TempMail tempMail = new TempMail())
+            {
+                Mail? mail = await tempMail.GetMailAsync();
+
+                Console.WriteLine($"Email: {mail!.Email}");
+                Console.WriteLine($"Token: {mail!.Token}");
+
+                string otp = (await tempMail.GetOTPAsync(mail.Token!))!;
+                Console.WriteLine($"OTP: {otp}");
+
+                Console.ReadLine();
+            }
+        }
+    }
+}

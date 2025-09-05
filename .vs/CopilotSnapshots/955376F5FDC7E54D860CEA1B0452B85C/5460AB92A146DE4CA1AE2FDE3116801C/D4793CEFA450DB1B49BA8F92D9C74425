@@ -1,0 +1,101 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
+
+namespace GetTempMailORG
+{
+    public class JA3Fingerprint
+    {
+        public string TlsVersion { get; set; }
+        public List<int> CipherSuites { get; set; }
+        public List<int> Extensions { get; set; }
+        public List<int> EllipticCurves { get; set; }
+        public List<int> EllipticCurvePointFormats { get; set; }
+        public List<string> ApplicationProtocols { get; set; }
+
+        public JA3Fingerprint()
+        {
+            CipherSuites = new List<int>();
+            Extensions = new List<int>();
+            EllipticCurves = new List<int>();
+            EllipticCurvePointFormats = new List<int>();
+            ApplicationProtocols = new List<string>();
+        }
+
+        // Chrome 120 Default JA3 Fingerprint
+        public static JA3Fingerprint Default => new JA3Fingerprint
+        {
+            TlsVersion = "771", // TLS 1.2
+            CipherSuites = new List<int>
+            {
+                0x1301, // TLS_AES_128_GCM_SHA256
+                0x1302, // TLS_AES_256_GCM_SHA384
+                0x1303, // TLS_CHACHA20_POLY1305_SHA256
+                0xc02b, // TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+                0xc02f, // TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+                0xc02c, // TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+                0xc030, // TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+                0xcca9, // TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+                0xcca8, // TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+            },
+            Extensions = new List<int>
+            {
+                0,     // server_name
+                23,    // session_ticket
+                65281, // renegotiation_info
+                10,    // supported_groups
+                11,    // ec_point_formats
+                35,    // session_ticket_tls
+                22,    // encrypt_then_mac
+                23,    // extended_master_secret
+                13,    // signature_algorithms
+                43,    // supported_versions
+                51,    // key_share
+            },
+            EllipticCurves = new List<int> { 29, 23, 24 }, // X25519, secp256r1, secp384r1
+            EllipticCurvePointFormats = new List<int> { 0 }, // uncompressed
+            ApplicationProtocols = new List<string> { "h2", "http/1.1" }
+        };
+
+        // Firefox Alternative
+        public static JA3Fingerprint Firefox => new JA3Fingerprint
+        {
+            TlsVersion = "771",
+            CipherSuites = new List<int>
+            {
+                0x1301, 0x1303, 0x1302, 0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca9, 0xcca8,
+                0xc013, 0xc014, 0x009c, 0x009d, 0x002f, 0x0035
+            },
+            Extensions = new List<int> { 0, 23, 65281, 10, 11, 35, 16, 5, 13, 43, 45, 51 },
+            EllipticCurves = new List<int> { 29, 23, 24, 25 },
+            EllipticCurvePointFormats = new List<int> { 0 },
+            ApplicationProtocols = new List<string> { "h2", "http/1.1" }
+        };
+
+        public List<int> GetCipherSuites()
+        {
+            return new List<int>(CipherSuites);
+        }
+
+        public SslProtocols GetSslProtocols()
+        {
+            return SslProtocols.Tls12 | SslProtocols.Tls13;
+        }
+
+        public List<string> GetApplicationProtocols()
+        {
+            return ApplicationProtocols;
+        }
+
+        public string GenerateJA3String()
+        {
+            var cipherSuites = string.Join("-", CipherSuites);
+            var extensions = string.Join("-", Extensions);
+            var ellipticCurves = string.Join("-", EllipticCurves);
+            var pointFormats = string.Join("-", EllipticCurvePointFormats);
+
+            return $"{TlsVersion},{cipherSuites},{extensions},{ellipticCurves},{pointFormats}";
+        }
+    }
+}

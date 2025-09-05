@@ -1,0 +1,75 @@
+﻿using Leaf.xNet;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+
+namespace GetTempMailORG
+{
+    public class TempMail
+    {
+        public string? _baseUrl = "https://web2.temp-mail.org";
+        Leaf.xNet.HttpRequest httpRequest;
+        public TempMail()
+        {
+            httpRequest = new Leaf.xNet.HttpRequest();
+            httpRequest.KeepAlive = true;
+            httpRequest.AddHeader("Content-Type", "charset=UTF-8");
+            httpRequest.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
+        }
+        public Mail? GetMail()
+        {
+            try
+            {
+                HttpResponse res = httpRequest.Post($"{_baseUrl}/mailbox");
+                if (res.StatusCode == HttpStatusCode.OK)
+                {
+                    string html = res.ToString();
+                    string token = Regex.Match(html, "\"token\":\"(.*?)\"").Groups[1].Value;
+                    string email = Regex.Match(html, "\"mailbox\":\"(.*?)\"").Groups[1].Value;
+                    return new Mail { Token = token, Email = email };
+                }
+            }
+            catch (Exception ex)
+            {
+                throw new Exception(ex.Message);
+            }
+            return null;
+        }
+        public string? GetOTP(string _token)
+        {
+            string? code = "";
+            httpRequest.AddHeader("Authorization", _token ?? "");
+            for (int i = 0; i < 10; i++)
+            {
+                try
+                {
+                    HttpResponse res = httpRequest.Get($"{_baseUrl}/messages");
+                    if (res.StatusCode == HttpStatusCode.OK)
+                    {
+                        string html = res.ToString();
+                        string otp = Regex.Match(html, "Your OTP is: (.*?)</p>").Groups[1].Value;
+                        if (!string.IsNullOrEmpty(otp))
+                        {
+                            return otp;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    throw new Exception(ex.Message);
+                }
+                Task.Delay(5000).Wait();
+            }
+            return code;
+        }
+        public class Mail
+        {
+            public string? Token { get; set; }
+            public string? Email { get; set; }
+
+        }
+    }
+}

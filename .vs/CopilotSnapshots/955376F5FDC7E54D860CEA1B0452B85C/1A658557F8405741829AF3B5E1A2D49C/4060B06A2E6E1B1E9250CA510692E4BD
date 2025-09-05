@@ -1,0 +1,211 @@
+﻿using System;
+using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace GetTempMailORG
+{
+    public class CustomHttpClient : IDisposable
+    {
+        private readonly TlsClient _tlsClient;
+        private bool disposed = false;
+
+        public CustomHttpClient(string host, int port = 443, JA3Fingerprint ja3Fingerprint = null, string proxyString = null)
+        {
+            _tlsClient = new TlsClient(host, port, ja3Fingerprint, proxyString);
+        }
+
+        public void Dispose()
+        {
+            if (!disposed)
+            {
+                _tlsClient?.Dispose();
+                disposed = true;
+            }
+        }
+
+        public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, TimeSpan timeout)
+        {
+            if (request == null)
+                throw new ArgumentNullException(nameof(request));
+
+            try
+            {
+                // Convert the HttpRequestMessage to a raw HTTP request string
+                var requestString = ConvertHttpRequestMessageToString(request);
+                
+                Console.WriteLine($"Sending request to {request.RequestUri?.Host}...");
+                Console.WriteLine($"Request length: {requestString.Length} characters");
+
+                // Use the TlsClient to send the raw request string
+                var responseString = await _tlsClient.SendRequestAsync(requestString, timeout);
+
+                Console.WriteLine($"Received response length: {responseString.Length} characters");
+                
+                // Validate response before parsing
+                if (string.IsNullOrEmpty(responseString))
+                {
+                    throw new Exception("Empty response received from server");
+                }
+
+                // Convert the raw HTTP response string back into an HttpResponseMessage
+                var response = ConvertStringToHttpResponseMessage(responseString);
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"CustomHttpClient error: {ex.Message}");
+                throw;
+            }
+        }
+
+        private string ConvertHttpRequestMessageToString(HttpRequestMessage request)
+        {
+            using (var sw = new StringWriter())
+            {
+                // Request line
+                var path = request.RequestUri.PathAndQuery;
+                if (string.IsNullOrEmpty(path)) path = "/";
+                
+                sw.WriteLine($"{request.Method} {path} HTTP/1.1");
+                sw.WriteLine($"Host: {request.RequestUri.Host}");
+
+                // Add request headers
+                foreach (var header in request.Headers) 
+                {
+                    sw.WriteLine($"{header.Key}: {string.Join(", ", header.Value)}");
+                }
+
+                // Add content headers if present
+                if (request.Content != null)
+                {
+                    foreach (var header in request.Content.Headers)
+                    {
+                        sw.WriteLine($"{header.Key}: {string.Join(", ", header.Value)}");
+                    }
+                }
+
+                // Empty line between headers and body
+                sw.WriteLine();
+
+                // Add body if present
+                if (request.Content != null) 
+                {
+                    var contentTask = request.Content.ReadAsStringAsync();
+                    contentTask.Wait();
+                    var content = contentTask.Result;
+                    
+                    if (!string.IsNullOrEmpty(content))
+                    {
+                        sw.Write(content);
+                    }
+                }
+
+                return sw.ToString();
+            }
+        }
+
+        private HttpResponseMessage ConvertStringToHttpResponseMessage(string response)
+        {
+            var httpResponse = new HttpResponseMessage();
+
+            try
+            {
+                if (string.IsNullOrEmpty(response))
+                {
+                    throw new Exception("Empty response string");
+                }
+
+                using (var sr = new StringReader(response))
+                {
+                    // Parse status line
+                    var statusLine = sr.ReadLine();
+                    if (string.IsNullOrEmpty(statusLine))
+                    {
+                        throw new Exception("No status line found in response");
+                    }
+
+                    Console.WriteLine($"Status line: {statusLine}");
+
+                    if (!statusLine.StartsWith("HTTP/"))
+                    {
+                        throw new Exception($"Invalid status line format: {statusLine}");
+                    }
+
+                    var statusLineParts = statusLine.Split(' ');
+                    if (statusLineParts.Length >= 3)
+                    {
+                        if (int.TryParse(statusLineParts[1], out int statusCode))
+                        {
+                            httpResponse.StatusCode = (HttpStatusCode)statusCode;
+                        }
+                        else
+                        {
+                            Console.WriteLine($"Could not parse status code from: {statusLineParts[1]}");
+                            httpResponse.StatusCode = HttpStatusCode.OK; // Default
+                        }
+                    }
+
+                    // Parse headers
+                    string line;
+                    var headerCount = 0;
+                    while ((line = sr.ReadLine()) != null)
+                    {
+                        if (string.IsNullOrWhiteSpace(line))
+                            break; // Headers end
+
+                        headerCount++;
+                        var headerParts = line.Split(new[] { ':' }, 2);
+                        if (headerParts.Length == 2)
+                        {
+                            var headerName = headerParts[0].Trim();
+                            var headerValue = headerParts[1].Trim();
+                            
+                            try
+                            {
+                                httpResponse.Headers.TryAddWithoutValidation(headerName, headerValue);
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"Could not add header {headerName}: {ex.Message}");
+                            }
+                        }
+                    }
+
+                    Console.WriteLine($"Parsed {headerCount} headers");
+
+                    // Parse body
+                    var body = sr.ReadToEnd();
+                    if (!string.IsNullOrEmpty(body))
+                    {
+                        httpResponse.Content = new StringContent(body, Encoding.UTF8);
+                        Console.WriteLine($"Response body length: {body.Length}");
+                    }
+                    else
+                    {
+                        httpResponse.Content = new StringContent("", Encoding.UTF8);
+                        Console.WriteLine("Empty response body");
+                    }
+                }
+
+                return httpResponse;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error parsing HTTP response: {ex.Message}");
+                
+                // Create a fallback response with the raw content
+                var fallbackResponse = new HttpResponseMessage
+                {
+                    StatusCode = HttpStatusCode.OK,
+                    Content = new StringContent(response, Encoding.UTF8)
+                };
+                
+                return fallbackResponse;
+            }
+        }
+    }
+}

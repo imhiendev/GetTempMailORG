@@ -1,0 +1,75 @@
+﻿using static GetTempMailORG.TempMail;
+
+namespace GetTempMailORG
+{
+    internal class Program
+    {
+        static async Task Main(string[] args)
+        {
+            Console.WriteLine("🚀 TempMail with Pure JA3 CustomHttpClient");
+            Console.WriteLine("==========================================\n");
+            
+            using (TempMail tempMail = new TempMail())
+            {
+                try
+                {
+                    Console.WriteLine("📧 Getting temporary email with JA3 fingerprinting...");
+                    Console.WriteLine("🎯 Using only CustomHttpClient approaches\n");
+                    
+                    Mail? mail = await tempMail.GetMailAsync();
+
+                    if (mail != null && !string.IsNullOrEmpty(mail.Email) && !string.IsNullOrEmpty(mail.Token))
+                    {
+                        Console.WriteLine($"\n🎉 SUCCESS!");
+                        Console.WriteLine($"📨 Email: {mail.Email}");
+                        Console.WriteLine($"🔑 Token: {mail.Token}");
+
+                        Console.WriteLine("\n" + new string('-', 50));
+                        Console.WriteLine("🔍 Monitoring for OTP with JA3 fingerprinting...");
+                        Console.WriteLine("💡 Send an email to the address above to test OTP retrieval");
+                        Console.WriteLine("⏱️  Using JA3 CustomHttpClient for OTP monitoring...\n");
+                        
+                        string? otp = await tempMail.GetOTPAsync(mail.Token!);
+                        if (!string.IsNullOrEmpty(otp))
+                        {
+                            Console.WriteLine($"\n🎊 OTP RECEIVED: {otp}");
+                            Console.WriteLine("✅ JA3 CustomHttpClient working perfectly!");
+                        }
+                        else
+                        {
+                            Console.WriteLine("\n⚠️  No OTP received during monitoring period");
+                            Console.WriteLine("📧 Email address is working - just send an email to it!");
+                            Console.WriteLine("💡 JA3 fingerprinting successfully bypassed Cloudflare for email creation!");
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("\n❌ FAILED - Could not get temporary email");
+                        Console.WriteLine("🛡️  JA3 CustomHttpClient approaches failed.");
+                        Console.WriteLine("💡 Recommendations:");
+                        Console.WriteLine("   • Try running again (JA3 fingerprinting is very effective)");
+                        Console.WriteLine("   • Check your internet connection");
+                        Console.WriteLine("   • The service might be temporarily down");
+                        Console.WriteLine("   • Consider using proxy if blocked by region");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"\n💥 EXCEPTION: {ex.Message}");
+                    if (ex.InnerException != null)
+                    {
+                        Console.WriteLine($"🔍 Inner Exception: {ex.InnerException.Message}");
+                    }
+                    
+                    Console.WriteLine("\n🔧 Debug Information:");
+                    Console.WriteLine($"📍 Exception type: {ex.GetType().Name}");
+                    Console.WriteLine($"📍 Stack trace: {ex.StackTrace}");
+                }
+            }
+
+            Console.WriteLine("\n" + new string('=', 50));
+            Console.WriteLine("🏁 Press any key to exit...");
+            Console.ReadLine();
+        }
+    }
+}

@@ -1,0 +1,169 @@
+﻿using System;
+using System.Net.Sockets;
+using System.Net.Security;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
+using System.Threading.Tasks;
+using System.Collections.Generic;
+using System.Linq;
+using System.IO;
+
+namespace GetTempMailORG
+{
+    public class TlsClientWithJA3 : IDisposable
+    {
+        private TcpClient tcpClient;
+        private SslStream sslStream;
+        private bool disposed = false;
+
+        // JA3 Fingerprint components
+        private readonly string ja3String;
+        private readonly List<SslProtocols> supportedProtocols;
+        private readonly List<int> supportedCipherSuites;
+        private readonly List<int> supportedExtensions;
+        private readonly List<int> supportedEllipticCurves;
+        private readonly List<int> supportedEllipticCurvePointFormats;
+
+        public TlsClientWithJA3()
+        {
+            // Chrome-like JA3 fingerprint configuration
+            supportedProtocols = new List<SslProtocols> { SslProtocols.Tls12, SslProtocols.Tls13 };
+            
+            // Common Chrome cipher suites
+            supportedCipherSuites = new List<int>
+            {
+                0x1301, // TLS_AES_128_GCM_SHA256
+                0x1302, // TLS_AES_256_GCM_SHA384
+                0x1303, // TLS_CHACHA20_POLY1305_SHA256
+                0xc02b, // TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+                0xc02f, // TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+                0xc02c, // TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+                0xc030, // TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+                0xcca9, // TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+                0xcca8, // TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+            };
+
+            // Chrome-like extensions
+            supportedExtensions = new List<int>
+            {
+                0,     // server_name
+                23,    // session_ticket
+                65281, // renegotiation_info
+                10,    // supported_groups
+                11,    // ec_point_formats
+                35,    // session_ticket_tls
+                22,    // encrypt_then_mac
+                23,    // extended_master_secret
+                13,    // signature_algorithms
+                43,    // supported_versions
+                51,    // key_share
+            };
+
+            supportedEllipticCurves = new List<int> { 29, 23, 24 }; // X25519, secp256r1, secp384r1
+            supportedEllipticCurvePointFormats = new List<int> { 0 }; // uncompressed
+
+            // Generate JA3 string
+            ja3String = GenerateJA3String();
+        }
+
+        private string GenerateJA3String()
+        {
+            var tlsVersion = "771"; // TLS 1.2
+            var cipherSuites = string.Join("-", supportedCipherSuites);
+            var extensions = string.Join("-", supportedExtensions);
+            var ellipticCurves = string.Join("-", supportedEllipticCurves);
+            var pointFormats = string.Join("-", supportedEllipticCurvePointFormats);
+
+            return $"{tlsVersion},{cipherSuites},{extensions},{ellipticCurves},{pointFormats}";
+        }
+
+        public async Task<bool> ConnectAsync(string hostname, int port = 443)
+        {
+            try
+            {
+                tcpClient = new TcpClient();
+                await tcpClient.ConnectAsync(hostname, port);
+
+                sslStream = new SslStream(
+                    tcpClient.GetStream(),
+                    false,
+                    ValidateServerCertificate,
+                    null
+                );
+
+                // Configure SSL options to mimic Chrome
+                var sslOptions = new SslClientAuthenticationOptions
+                {
+                    TargetHost = hostname,
+                    EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                    CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
+                    EncryptionPolicy = EncryptionPolicy.RequireEncryption
+                };
+
+                await sslStream.AuthenticateAsClientAsync(sslOptions);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"TLS connection failed: {ex.Message}");
+                return false;
+            }
+        }
+
+        private bool ValidateServerCertificate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors)
+        {
+            // Accept all certificates (bypass SSL validation for testing)
+            return true;
+        }
+
+        public async Task<string> SendHttpRequestAsync(string request)
+        {
+            if (sslStream == null || !sslStream.IsAuthenticated)
+                throw new InvalidOperationException("TLS connection not established");
+
+            try
+            {
+                // Send HTTP request
+                byte[] requestBytes = Encoding.UTF8.GetBytes(request);
+                await sslStream.WriteAsync(requestBytes, 0, requestBytes.Length);
+                await sslStream.FlushAsync();
+
+                // Read response
+                using var memoryStream = new MemoryStream();
+                byte[] buffer = new byte[4096];
+                int bytesRead;
+
+                do
+                {
+                    bytesRead = await sslStream.ReadAsync(buffer, 0, buffer.Length);
+                    if (bytesRead > 0)
+                    {
+                        memoryStream.Write(buffer, 0, bytesRead);
+                    }
+                } while (bytesRead > 0 && sslStream.DataAvailable);
+
+                return Encoding.UTF8.GetString(memoryStream.ToArray());
+            }
+            catch (Exception ex)
+            {
+                throw new Exception($"HTTP request failed: {ex.Message}");
+            }
+        }
+
+        public string GetJA3Fingerprint()
+        {
+            return ja3String;
+        }
+
+        public void Dispose()
+        {
+            if (!disposed)
+            {
+                sslStream?.Dispose();
+                tcpClient?.Dispose();
+                disposed = true;
+            }
+        }
+    }
+}

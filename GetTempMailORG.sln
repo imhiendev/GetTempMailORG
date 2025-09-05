@@ -1,0 +1,22 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.12.35527.113 d17.12
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GetTempMailORG", "GetTempMailORG.csproj", "{F988C1BA-D7F8-4BF4-9C5A-94F5971C80D6}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{F988C1BA-D7F8-4BF4-9C5A-94F5971C80D6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F988C1BA-D7F8-4BF4-9C5A-94F5971C80D6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F988C1BA-D7F8-4BF4-9C5A-94F5971C80D6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F988C1BA-D7F8-4BF4-9C5A-94F5971C80D6}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

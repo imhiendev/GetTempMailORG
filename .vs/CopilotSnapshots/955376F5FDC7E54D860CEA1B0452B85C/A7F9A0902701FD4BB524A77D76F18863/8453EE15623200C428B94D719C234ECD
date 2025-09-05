@@ -1,0 +1,149 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
+using System.Linq;
+
+namespace GetTempMailORG
+{
+    public class JA3Fingerprint
+    {
+        public string TlsVersion { get; set; }
+        public List<int> CipherSuites { get; set; }
+        public List<int> Extensions { get; set; }
+        public List<int> EllipticCurves { get; set; }
+        public List<int> EllipticCurvePointFormats { get; set; }
+        public List<string> ApplicationProtocols { get; set; }
+
+        public JA3Fingerprint()
+        {
+            CipherSuites = new List<int>();
+            Extensions = new List<int>();
+            EllipticCurves = new List<int>();
+            EllipticCurvePointFormats = new List<int>();
+            ApplicationProtocols = new List<string>();
+        }
+
+        // Parse JA3 fingerprint string
+        public static JA3Fingerprint ParseFromString(string ja3String)
+        {
+            var parts = ja3String.Split(',');
+            if (parts.Length != 5)
+                throw new ArgumentException("Invalid JA3 string format. Expected 5 comma-separated parts.");
+
+            var fingerprint = new JA3Fingerprint
+            {
+                TlsVersion = parts[0],
+                CipherSuites = ParseIntList(parts[1]),
+                Extensions = ParseIntList(parts[2]),
+                EllipticCurves = ParseIntList(parts[3]),
+                EllipticCurvePointFormats = ParseIntList(parts[4]),
+                ApplicationProtocols = new List<string> { "h2", "http/1.1" } // Default protocols
+            };
+
+            return fingerprint;
+        }
+
+        private static List<int> ParseIntList(string input)
+        {
+            if (string.IsNullOrEmpty(input))
+                return new List<int>();
+
+            return input.Split('-')
+                       .Where(s => !string.IsNullOrEmpty(s))
+                       .Select(int.Parse)
+                       .ToList();
+        }
+
+        // Chrome 120 Default JA3 Fingerprint
+        public static JA3Fingerprint Default => new JA3Fingerprint
+        {
+            TlsVersion = "771", // TLS 1.2
+            CipherSuites = new List<int>
+            {
+                0x1301, // TLS_AES_128_GCM_SHA256
+                0x1302, // TLS_AES_256_GCM_SHA384
+                0x1303, // TLS_CHACHA20_POLY1305_SHA256
+                0xc02b, // TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+                0xc02f, // TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+                0xc02c, // TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+                0xc030, // TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+                0xcca9, // TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+                0xcca8, // TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+            },
+            Extensions = new List<int>
+            {
+                0,     // server_name
+                23,    // session_ticket
+                65281, // renegotiation_info
+                10,    // supported_groups
+                11,    // ec_point_formats
+                35,    // session_ticket_tls
+                22,    // encrypt_then_mac
+                23,    // extended_master_secret
+                13,    // signature_algorithms
+                43,    // supported_versions
+                51,    // key_share
+            },
+            EllipticCurves = new List<int> { 29, 23, 24 }, // X25519, secp256r1, secp384r1
+            EllipticCurvePointFormats = new List<int> { 0 }, // uncompressed
+            ApplicationProtocols = new List<string> { "h2", "http/1.1" }
+        };
+
+        // Custom JA3 fingerprint from your string
+        public static JA3Fingerprint CustomChrome => ParseFromString("769,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-21-41-28-19,29-23-24,0");
+
+        // Firefox Alternative
+        public static JA3Fingerprint Firefox => new JA3Fingerprint
+        {
+            TlsVersion = "771",
+            CipherSuites = new List<int>
+            {
+                0x1301, 0x1303, 0x1302, 0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca9, 0xcca8,
+                0xc013, 0xc014, 0x009c, 0x009d, 0x002f, 0x0035
+            },
+            Extensions = new List<int> { 0, 23, 65281, 10, 11, 35, 16, 5, 13, 43, 45, 51 },
+            EllipticCurves = new List<int> { 29, 23, 24, 25 },
+            EllipticCurvePointFormats = new List<int> { 0 },
+            ApplicationProtocols = new List<string> { "h2", "http/1.1" }
+        };
+
+        public List<int> GetCipherSuites()
+        {
+            return new List<int>(CipherSuites);
+        }
+
+        public SslProtocols GetSslProtocols()
+        {
+            // Map TLS version to SslProtocols
+            return TlsVersion switch
+            {
+                "769" => SslProtocols.Tls12 | SslProtocols.Tls13, // TLS 1.0 + newer
+                "770" => SslProtocols.Tls11 | SslProtocols.Tls12 | SslProtocols.Tls13, // TLS 1.1 + newer
+                "771" => SslProtocols.Tls12 | SslProtocols.Tls13, // TLS 1.2 + newer
+                "772" => SslProtocols.Tls13, // TLS 1.3 only
+                _ => SslProtocols.Tls12 | SslProtocols.Tls13 // Default
+            };
+        }
+
+        public List<string> GetApplicationProtocols()
+        {
+            return ApplicationProtocols;
+        }
+
+        public string GenerateJA3String()
+        {
+            var cipherSuites = string.Join("-", CipherSuites);
+            var extensions = string.Join("-", Extensions);
+            var ellipticCurves = string.Join("-", EllipticCurves);
+            var pointFormats = string.Join("-", EllipticCurvePointFormats);
+
+            return $"{TlsVersion},{cipherSuites},{extensions},{ellipticCurves},{pointFormats}";
+        }
+
+        public string GetDisplayInfo()
+        {
+            return $"TLS: {TlsVersion}, Ciphers: {CipherSuites.Count}, Extensions: {Extensions.Count}, Curves: {EllipticCurves.Count}";
+        }
+    }
+}

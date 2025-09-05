@@ -1,0 +1,64 @@
+﻿using static GetTempMailORG.TempMail;
+
+namespace GetTempMailORG
+{
+    internal class Program
+    {
+        static async Task Main(string[] args)
+        {
+            Console.WriteLine("🚀 TempMail with JA3 Fingerprinting");
+            Console.WriteLine("===================================\n");
+            
+            using (TempMail tempMail = new TempMail())
+            {
+                try
+                {
+                    Console.WriteLine("📧 Getting temporary email...");
+                    
+                    Mail? mail = await tempMail.GetMailAsync();
+
+                    if (mail != null && !string.IsNullOrEmpty(mail.Email) && !string.IsNullOrEmpty(mail.Token))
+                    {
+                        Console.WriteLine($"\n✅ SUCCESS!");
+                        Console.WriteLine($"📨 Email: {mail.Email}");
+                        Console.WriteLine($"🔑 Token: {mail.Token}");
+
+                        Console.WriteLine("\n" + new string('-', 50));
+                        Console.WriteLine("🔍 Monitoring for OTP...");
+                        Console.WriteLine("💡 Send an email to the address above to test OTP retrieval");
+                        Console.WriteLine("⏱️  Checking for messages...\n");
+                        
+                        string? otp = await tempMail.GetOTPAsync(mail.Token!);
+                        if (!string.IsNullOrEmpty(otp))
+                        {
+                            Console.WriteLine($"\n🎊 OTP RECEIVED: {otp}");
+                            Console.WriteLine("✅ System working perfectly!");
+                        }
+                        else
+                        {
+                            Console.WriteLine("\n⚠️  No OTP received during monitoring period");
+                            Console.WriteLine("📧 Email address is working - just send an email to it!");
+                            Console.WriteLine("💡 The bypass successfully created a temporary email!");
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("\n❌ FAILED - Could not get temporary email");
+                        Console.WriteLine("💡 Recommendations:");
+                        Console.WriteLine("   • Try running again");
+                        Console.WriteLine("   • Check your internet connection");
+                        Console.WriteLine("   • The service might be temporarily down");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"\n💥 ERROR: {ex.Message}");
+                }
+            }
+
+            Console.WriteLine("\n" + new string('=', 50));
+            Console.WriteLine("🏁 Press any key to exit...");
+            Console.ReadKey();
+        }
+    }
+}

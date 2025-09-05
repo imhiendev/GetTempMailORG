@@ -1,0 +1,615 @@
+﻿using System;
+using System.IO;
+using System.Net.Sockets;
+using System.Net.Security;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Linq;
+using System.IO.Compression;
+
+namespace GetTempMailORG
+{
+    public class TlsClient : IDisposable
+    {
+        private readonly string _host;
+        private readonly JA3Fingerprint _ja3Fingerprint;
+        private readonly int _port;
+        private readonly TcpClient _tcpClient;
+        private SslStream _sslStream;
+        private readonly string proxyString;
+        private bool disposed = false;
+
+        public TlsClient(string host, int port = 443, JA3Fingerprint ja3Fingerprint = null, string proxyString = null)
+        {
+            _host = host;
+            _port = port;
+            _ja3Fingerprint = ja3Fingerprint ?? JA3Fingerprint.Default;
+            this.proxyString = proxyString;
+            _tcpClient = new TcpClient();
+        }
+
+        public void Dispose()
+        {
+            if (!disposed)
+            {
+                _sslStream?.Dispose();
+                _tcpClient?.Dispose();
+                disposed = true;
+            }
+        }
+
+        public async Task<string> SendRequestAsync(string request, TimeSpan timeout)
+        {
+            try
+            {
+                await EstablishConnection(timeout);
+                
+                // Send HTTP request
+                var requestBytes = Encoding.UTF8.GetBytes(request);
+                await _sslStream.WriteAsync(requestBytes, 0, requestBytes.Length);
+                await _sslStream.FlushAsync();
+
+                // Read response with better handling
+                return await ReadHttpResponseAsync(timeout);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"TlsClient detailed error: {ex.GetType().Name}: {ex.Message}");
+                if (ex.InnerException != null)
+                {
+                    Console.WriteLine($"Inner exception: {ex.InnerException.Message}");
+                }
+                throw;
+            }
+        }
+
+        private async Task EstablishConnection(TimeSpan timeout)
+        {
+            Stream baseStream;
+
+            if (!string.IsNullOrWhiteSpace(proxyString))
+            {
+                baseStream = await ConnectViaProxy();
+            }
+            else
+            {
+                await _tcpClient.ConnectAsync(_host, _port);
+                baseStream = _tcpClient.GetStream();
+            }
+
+            _sslStream = new SslStream(baseStream, false, ServerCertificateCustomValidationCallback);
+            var clientCertificates = await GetClientCertificatesAsync();
+            var applicationProtocols = _ja3Fingerprint.GetApplicationProtocols()
+                .Select(p => new SslApplicationProtocol(Encoding.UTF8.GetBytes(p)))
+                .ToList();
+
+            var sslClientAuthenticationOptions = new SslClientAuthenticationOptions
+            {
+                TargetHost = _host,
+                ClientCertificates = clientCertificates,
+                EnabledSslProtocols = _ja3Fingerprint.GetSslProtocols(),
+                ApplicationProtocols = applicationProtocols,
+                EncryptionPolicy = EncryptionPolicy.RequireEncryption
+            };
+
+            using var cts = new CancellationTokenSource(timeout);
+            await _sslStream.AuthenticateAsClientAsync(sslClientAuthenticationOptions, cts.Token);
+        }
+
+        private async Task<Stream> ConnectViaProxy()
+        {
+            var parts = proxyString.Split(':');
+            if (parts.Length < 2)
+                throw new FormatException("Invalid proxy format. Expected ip:port[:user[:pass]]");
+
+            var proxyHost = parts[0];
+            var proxyPort = int.Parse(parts[1]);
+            string? username = parts.Length > 2 ? parts[2] : null;
+            string? password = parts.Length > 3 ? parts[3] : null;
+
+            await _tcpClient.ConnectAsync(proxyHost, proxyPort);
+            var baseStream = _tcpClient.GetStream();
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"CONNECT {_host}:{_port} HTTP/1.1");
+            sb.AppendLine($"Host: {_host}:{_port}");
+
+            if (!string.IsNullOrEmpty(username) && !string.IsNullOrEmpty(password))
+            {
+                var credentials = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{username}:{password}"));
+                sb.AppendLine($"Proxy-Authorization: Basic {credentials}");
+            }
+
+            sb.AppendLine();
+            var connectRequest = sb.ToString();
+            var connectRequestBytes = Encoding.ASCII.GetBytes(connectRequest);
+            await baseStream.WriteAsync(connectRequestBytes, 0, connectRequestBytes.Length);
+
+            using var proxyReader = new StreamReader(baseStream, Encoding.ASCII, false, leaveOpen: true);
+            string proxyLine;
+            bool success = false;
+            while (!string.IsNullOrWhiteSpace(proxyLine = await proxyReader.ReadLineAsync()))
+            {
+                if (proxyLine.StartsWith("HTTP/1.1 200") || proxyLine.StartsWith("HTTP/1.0 200"))
+                {
+                    success = true;
+                    break;
+                }
+                if (proxyLine.StartsWith("HTTP/1."))
+                {
+                    throw new Exception($"Proxy CONNECT failed: {proxyLine}");
+                }
+            }
+
+            if (!success)
+                throw new Exception("Proxy CONNECT tunnel failed.");
+
+            return baseStream;
+        }
+
+        private async Task<string> ReadHttpResponseAsync(TimeSpan timeout)
+        {
+            using var cts = new CancellationTokenSource(timeout);
+            
+            try
+            {
+                // Read raw bytes first to handle any encoding issues
+                var rawResponse = await ReadRawBytesAsync(cts.Token);
+                
+                // Try to detect and handle different encodings
+                var responseString = await ProcessRawResponse(rawResponse);
+                
+                // Validate HTTP response format
+                if (string.IsNullOrEmpty(responseString) || !responseString.StartsWith("HTTP/"))
+                {
+                    // Log raw bytes for debugging
+                    var preview = rawResponse.Take(50).Select(b => b < 32 || b > 126 ? $"\\x{b:X2}" : ((char)b).ToString());
+                    var previewString = string.Join("", preview);
+                    Console.WriteLine($"Invalid HTTP response detected. First 50 bytes: {previewString}");
+                    
+                    // Try alternative decoding methods
+                    responseString = TryAlternativeEncodingDecoding(rawResponse);
+                }
+                
+                return responseString;
+            }
+            catch (OperationCanceledException)
+            {
+                throw new TimeoutException("HTTP response reading timed out");
+            }
+        }
+
+        private async Task<byte[]> ReadRawBytesAsync(CancellationToken cancellationToken)
+        {
+            using var memoryStream = new MemoryStream();
+            var buffer = new byte[8192];
+            var totalBytesRead = 0;
+            var lastReadTime = DateTime.Now;
+            
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    // Use a shorter timeout for individual reads
+                    var readTask = _sslStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
+                    var timeoutTask = Task.Delay(5000, cancellationToken);
+                    
+                    var completedTask = await Task.WhenAny(readTask, timeoutTask);
+                    
+                    if (completedTask == readTask)
+                    {
+                        var bytesRead = await readTask;
+                        if (bytesRead > 0)
+                        {
+                            memoryStream.Write(buffer, 0, bytesRead);
+                            totalBytesRead += bytesRead;
+                            lastReadTime = DateTime.Now;
+                        }
+                        else
+                        {
+                            // No more data
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        // Timeout - check if we have enough data
+                        if (totalBytesRead > 0 && DateTime.Now.Subtract(lastReadTime).TotalSeconds > 3)
+                        {
+                            break; // Assume response is complete
+                        }
+                    }
+                }
+                catch (Exception ex) when (!(ex is OperationCanceledException))
+                {
+                    Console.WriteLine($"Read error: {ex.Message}");
+                    break;
+                }
+            }
+            
+            return memoryStream.ToArray();
+        }
+
+        private async Task<string> ProcessRawResponse(byte[] rawBytes)
+        {
+            try
+            {
+                // Try to extract HTTP headers first to find encoding
+                var responseString = Encoding.UTF8.GetString(rawBytes);
+                var lines = responseString.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+                
+                bool contentIsCompressed = false;
+                string compressionType = "";
+                bool isChunked = false;
+                int contentLength = -1;
+                int headerEndIndex = -1;
+                
+                // Find headers and check for compression
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    var line = lines[i];
+                    if (string.IsNullOrEmpty(line))
+                    {
+                        headerEndIndex = i;
+                        break;
+                    }
+                    
+                    var lowerLine = line.ToLower();
+                    if (lowerLine.StartsWith("content-encoding:"))
+                    {
+                        if (lowerLine.Contains("gzip"))
+                        {
+                            contentIsCompressed = true;
+                            compressionType = "gzip";
+                            Console.WriteLine($"🗜️ Found gzip compression header: {line}");
+                        }
+                        else if (lowerLine.Contains("deflate"))
+                        {
+                            contentIsCompressed = true;
+                            compressionType = "deflate";
+                            Console.WriteLine($"🗜️ Found deflate compression header: {line}");
+                        }
+                        else if (lowerLine.Contains("br"))
+                        {
+                            Console.WriteLine($"⚠️ Brotli compression detected but not supported: {line}");
+                        }
+                    }
+                    else if (lowerLine.StartsWith("transfer-encoding:") && lowerLine.Contains("chunked"))
+                    {
+                        isChunked = true;
+                    }
+                    else if (lowerLine.StartsWith("content-length:"))
+                    {
+                        int.TryParse(line.Substring(line.IndexOf(':') + 1).Trim(), out contentLength);
+                    }
+                }
+                
+                if (contentIsCompressed && headerEndIndex > -1)
+                {
+                    // Extract header and body more precisely
+                    var headerBytes = new List<byte>();
+                    var bodyStartIndex = -1;
+                    
+                    // Find exact boundary between headers and body
+                    for (int i = 0; i < rawBytes.Length - 3; i++)
+                    {
+                        if (rawBytes[i] == 0x0D && rawBytes[i + 1] == 0x0A && 
+                            rawBytes[i + 2] == 0x0D && rawBytes[i + 3] == 0x0A)
+                        {
+                            bodyStartIndex = i + 4;
+                            break;
+                        }
+                    }
+                    
+                    if (bodyStartIndex == -1)
+                    {
+                        // Fallback: try with \n\n
+                        for (int i = 0; i < rawBytes.Length - 1; i++)
+                        {
+                            if (rawBytes[i] == 0x0A && rawBytes[i + 1] == 0x0A)
+                            {
+                                bodyStartIndex = i + 2;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    if (bodyStartIndex > 0)
+                    {
+                        var headerText = Encoding.UTF8.GetString(rawBytes.Take(bodyStartIndex).ToArray());
+                        var bodyBytes = rawBytes.Skip(bodyStartIndex).ToArray();
+                        
+                        Console.WriteLine($"🗜️ Attempting to decompress {compressionType} body ({bodyBytes.Length} bytes)...");
+                        Console.WriteLine($"📊 Body starts at byte {bodyStartIndex}, first 10 bytes: {string.Join(" ", bodyBytes.Take(10).Select(b => b.ToString("X2")))}");
+                        
+                        // Check if body looks like valid gzip
+                        if (bodyBytes.Length >= 2)
+                        {
+                            bool isValidGzip = bodyBytes[0] == 0x1F && bodyBytes[1] == 0x8B;
+                            Console.WriteLine($"🔍 Gzip magic header check: {(isValidGzip ? "✅ Valid" : "❌ Invalid")} (0x{bodyBytes[0]:X2} 0x{bodyBytes[1]:X2})");
+                            
+                            if (!isValidGzip && compressionType == "gzip")
+                            {
+                                Console.WriteLine("⚠️ Header says gzip but data doesn't have gzip magic bytes, trying deflate instead");
+                                compressionType = "deflate";
+                            }
+                        }
+                        
+                        try
+                        {
+                            string decompressedBody = await TrySmartDecompression(bodyBytes, compressionType);
+                            return headerText + decompressedBody;
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"⚠️ Smart decompression failed: {ex.Message}");
+                            Console.WriteLine("🔄 Trying all decompression methods as fallback...");
+                            
+                            try
+                            {
+                                string decompressedBody = await TryAllDecompressionMethods(bodyBytes);
+                                return headerText + decompressedBody;
+                            }
+                            catch
+                            {
+                                Console.WriteLine("⚠️ All decompression methods failed, returning uncompressed body");
+                                return headerText + Encoding.UTF8.GetString(bodyBytes);
+                            }
+                        }
+                    }
+                }
+
+                // If no compression detected, return as UTF-8
+                if (responseString.StartsWith("HTTP/"))
+                {
+                    return responseString;
+                }
+
+                // Try alternative encodings if UTF-8 doesn't work
+                return TryAlternativeEncodingDecoding(rawBytes);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error processing raw response: {ex.Message}");
+                return Encoding.UTF8.GetString(rawBytes);
+            }
+        }
+
+        private async Task<string> TrySmartDecompression(byte[] bodyBytes, string compressionType)
+        {
+            // Try the method indicated by the header first
+            if (compressionType == "gzip")
+            {
+                return await DecompressGzipSafe(bodyBytes);
+            }
+            else if (compressionType == "deflate")
+            {
+                return await DecompressDeflateSafe(bodyBytes);
+            }
+            
+            // Fallback to trying all methods
+            return await TryAllDecompressionMethods(bodyBytes);
+        }
+
+        private async Task<string> DecompressGzipSafe(byte[] compressedData)
+        {
+            try
+            {
+                // Validate gzip header
+                if (compressedData.Length < 10)
+                {
+                    throw new InvalidDataException("Data too short for gzip format");
+                }
+                
+                if (compressedData[0] != 0x1F || compressedData[1] != 0x8B)
+                {
+                    throw new InvalidDataException($"Invalid gzip magic header: 0x{compressedData[0]:X2} 0x{compressedData[1]:X2}");
+                }
+                
+                if (compressedData[2] != 0x08)
+                {
+                    throw new InvalidDataException($"Unsupported gzip compression method: 0x{compressedData[2]:X2}");
+                }
+                
+                using var compressedStream = new MemoryStream(compressedData);
+                using var gzipStream = new GZipStream(compressedStream, CompressionMode.Decompress);
+                using var decompressedStream = new MemoryStream();
+                
+                await gzipStream.CopyToAsync(decompressedStream);
+                var decompressedBytes = decompressedStream.ToArray();
+                
+                var result = Encoding.UTF8.GetString(decompressedBytes);
+                Console.WriteLine($"✅ Gzip decompression successful. Original: {compressedData.Length} bytes → Decompressed: {decompressedBytes.Length} bytes");
+                return result;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ Safe gzip decompression failed: {ex.Message}");
+                throw;
+            }
+        }
+
+        private async Task<string> DecompressDeflateSafe(byte[] compressedData)
+        {
+            try
+            {
+                Console.WriteLine($"🔍 Attempting deflate on {compressedData.Length} bytes");
+                
+                using var compressedStream = new MemoryStream(compressedData);
+                using var deflateStream = new DeflateStream(compressedStream, CompressionMode.Decompress);
+                using var decompressedStream = new MemoryStream();
+                
+                await deflateStream.CopyToAsync(decompressedStream);
+                var decompressedBytes = decompressedStream.ToArray();
+                
+                var result = Encoding.UTF8.GetString(decompressedBytes);
+                Console.WriteLine($"✅ Deflate decompression successful. Original: {compressedData.Length} bytes → Decompressed: {decompressedBytes.Length} bytes");
+                return result;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ Safe deflate decompression failed: {ex.Message}");
+                throw;
+            }
+        }
+
+        private string TryAlternativeEncodingDecoding(byte[] rawBytes)
+        {
+            var encodings = new[]
+            {
+                Encoding.ASCII,
+                Encoding.UTF8,
+                Encoding.Unicode,
+                Encoding.BigEndianUnicode,
+                Encoding.UTF32
+            };
+
+            foreach (var encoding in encodings)
+            {
+                try
+                {
+                    var decoded = encoding.GetString(rawBytes);
+                    if (decoded.Contains("HTTP/"))
+                    {
+                        var httpIndex = decoded.IndexOf("HTTP/");
+                        return decoded.Substring(httpIndex);
+                    }
+                }
+                catch
+                {
+                    continue;
+                }
+            }
+
+            // Last resort - return as hex string for debugging
+            return BitConverter.ToString(rawBytes.Take(1000).ToArray()).Replace("-", " ");
+        }
+
+        private async Task<string> DecompressGzip(byte[] compressedData)
+        {
+            return await DecompressGzipSafe(compressedData);
+        }
+
+        private async Task<string> DecompressDeflate(byte[] compressedData)
+        {
+            return await DecompressDeflateSafe(compressedData);
+        }
+
+        private async Task<string> TryAllDecompressionMethods(byte[] data)
+        {
+            // Method 1: Try standard deflate
+            try
+            {
+                using var compressedStream = new MemoryStream(data);
+                using var deflateStream = new DeflateStream(compressedStream, CompressionMode.Decompress);
+                using var decompressedStream = new MemoryStream();
+                
+                await deflateStream.CopyToAsync(decompressedStream);
+                var decompressedBytes = decompressedStream.ToArray();
+                
+                var result = Encoding.UTF8.GetString(decompressedBytes);
+                if (result.Length > 0 && (result.Contains("<!") || result.Contains("{") || result.Contains("token") || result.Contains("mailbox")))
+                {
+                    Console.WriteLine($"✅ Standard deflate decompression successful. Original: {data.Length} bytes → Decompressed: {decompressedBytes.Length} bytes");
+                    return result;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"⚠️ Standard deflate failed: {ex.Message}");
+            }
+
+            // Method 2: Try raw deflate (skip zlib header)
+            try
+            {
+                var rawData = data.Length > 2 ? data.Skip(2).ToArray() : data;
+                using var compressedStream = new MemoryStream(rawData);
+                using var deflateStream = new DeflateStream(compressedStream, CompressionMode.Decompress);
+                using var decompressedStream = new MemoryStream();
+                
+                await deflateStream.CopyToAsync(decompressedStream);
+                var decompressedBytes = decompressedStream.ToArray();
+                
+                var result = Encoding.UTF8.GetString(decompressedBytes);
+                if (result.Length > 0)
+                {
+                    Console.WriteLine($"✅ Raw deflate decompression successful. Original: {data.Length} bytes → Decompressed: {decompressedBytes.Length} bytes");
+                    return result;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"⚠️ Raw deflate failed: {ex.Message}");
+            }
+
+            // Method 3: Try zlib deflate (with header)
+            try
+            {
+                // Check for zlib header (0x78)
+                if (data.Length > 0 && (data[0] == 0x78))
+                {
+                    using var compressedStream = new MemoryStream(data.Skip(2).ToArray()); // Skip zlib header
+                    using var deflateStream = new DeflateStream(compressedStream, CompressionMode.Decompress);
+                    using var decompressedStream = new MemoryStream();
+                    
+                    await deflateStream.CopyToAsync(decompressedStream);
+                    var decompressedBytes = decompressedStream.ToArray();
+                    
+                    var result = Encoding.UTF8.GetString(decompressedBytes);
+                    if (result.Length > 0)
+                    {
+                        Console.WriteLine($"✅ Zlib deflate decompression successful. Original: {data.Length} bytes → Decompressed: {decompressedBytes.Length} bytes");
+                        return result;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"⚠️ Zlib deflate failed: {ex.Message}");
+            }
+
+            // Method 4: Try gzip as fallback (even if header says deflate)
+            try
+            {
+                using var compressedStream = new MemoryStream(data);
+                using var gzipStream = new GZipStream(compressedStream, CompressionMode.Decompress);
+                using var decompressedStream = new MemoryStream();
+                
+                await gzipStream.CopyToAsync(decompressedStream);
+                var decompressedBytes = decompressedStream.ToArray();
+                
+                var result = Encoding.UTF8.GetString(decompressedBytes);
+                if (result.Length > 0)
+                {
+                    Console.WriteLine($"✅ Fallback gzip decompression successful. Original: {data.Length} bytes → Decompressed: {decompressedBytes.Length} bytes");
+                    return result;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"⚠️ Fallback gzip failed: {ex.Message}");
+            }
+
+            throw new Exception("All decompression methods failed");
+        }
+
+        private async Task<string> TryDecompression(byte[] data)
+        {
+            return await TryAllDecompressionMethods(data);
+        }
+
+        private async Task<X509CertificateCollection> GetClientCertificatesAsync()
+        {
+            var certificates = new X509CertificateCollection();
+            return certificates;
+        }
+
+        private bool ServerCertificateCustomValidationCallback(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors)
+        {
+            return true; // Accept all certificates for bypass
+        }
+    }
+}

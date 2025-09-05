@@ -1,0 +1,73 @@
+﻿using static GetTempMailORG.TempMail;
+
+namespace GetTempMailORG
+{
+    internal class Program
+    {
+        static async Task Main(string[] args)
+        {
+            Console.WriteLine("🚀 TempMail with Real JA3 Fingerprinting + Advanced Cloudflare Bypass");
+            Console.WriteLine("======================================================================\n");
+            
+            using (TempMail tempMail = new TempMail())
+            {
+                try
+                {
+                    Console.WriteLine("📧 Getting temporary email with multiple bypass techniques...");
+                    Console.WriteLine("🔐 Priority: JA3 CustomHttpClient → Browser → Minimal → Postman\n");
+                    
+                    Mail? mail = await tempMail.GetMailAsync();
+
+                    if (mail != null && !string.IsNullOrEmpty(mail.Email) && !string.IsNullOrEmpty(mail.Token))
+                    {
+                        Console.WriteLine($"\n🎉 SUCCESS!");
+                        Console.WriteLine($"📨 Email: {mail.Email}");
+                        Console.WriteLine($"🔑 Token: {mail.Token}");
+
+                        Console.WriteLine("\n" + new string('-', 60));
+                        Console.WriteLine("🔍 Monitoring for OTP...");
+                        Console.WriteLine("💡 Send an email to the address above to test OTP retrieval");
+                        Console.WriteLine("⏱️  Will check for 60 seconds with JA3 fingerprinting...\n");
+                        
+                        string? otp = await tempMail.GetOTPAsync(mail.Token!);
+                        if (!string.IsNullOrEmpty(otp))
+                        {
+                            Console.WriteLine($"\n🎊 OTP RECEIVED: {otp}");
+                            Console.WriteLine("✅ JA3 Fingerprinting working perfectly!");
+                        }
+                        else
+                        {
+                            Console.WriteLine("\n⚠️  No OTP received during monitoring period");
+                            Console.WriteLine("📧 Email address is working - just send an email to it!");
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("\n❌ FAILED - Could not get temporary email");
+                        Console.WriteLine("🛡️  All bypass methods failed. Cloudflare protection is very strong.");
+                        Console.WriteLine("💡 Recommendations:");
+                        Console.WriteLine("   • Try running again (JA3 fingerprinting usually works)");
+                        Console.WriteLine("   • Check your internet connection");
+                        Console.WriteLine("   • The service might be temporarily down");
+                        Console.WriteLine("   • Consider using proxy if blocked by region");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"\n💥 EXCEPTION: {ex.Message}");
+                    if (ex.InnerException != null)
+                    {
+                        Console.WriteLine($"🔍 Inner Exception: {ex.InnerException.Message}");
+                    }
+                    
+                    Console.WriteLine("\n🔧 Debug Information:");
+                    Console.WriteLine($"📍 Stack trace: {ex.StackTrace}");
+                }
+            }
+
+            Console.WriteLine("\n" + new string('=', 60));
+            Console.WriteLine("🏁 Press any key to exit...");
+            Console.ReadLine();
+        }
+    }
+}

@@ -1,0 +1,40 @@
+﻿using static GetTempMailORG.TempMail;
+
+namespace GetTempMailORG
+{
+    internal class Program
+    {
+        static async Task Main(string[] args)
+        {
+            using (TempMail tempMail = new TempMail())
+            {
+                Console.WriteLine("Attempting to get mail...");
+                Mail? mail = await tempMail.GetMailAsync();
+
+                if (mail != null)
+                {
+                    Console.WriteLine($"Email: {mail.Email}");
+                    Console.WriteLine($"Token: {mail.Token}");
+
+                    Console.WriteLine("\nAttempting to get OTP...");
+                    string? otp = await tempMail.GetOTPAsync(mail.Token!);
+                    if (!string.IsNullOrEmpty(otp))
+                    {
+                        Console.WriteLine($"OTP: {otp}");
+                    }
+                    else
+                    {
+                        Console.WriteLine("No OTP received");
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("Failed to get mail");
+                }
+
+                Console.WriteLine("\nPress any key to exit...");
+                Console.ReadLine();
+            }
+        }
+    }
+}

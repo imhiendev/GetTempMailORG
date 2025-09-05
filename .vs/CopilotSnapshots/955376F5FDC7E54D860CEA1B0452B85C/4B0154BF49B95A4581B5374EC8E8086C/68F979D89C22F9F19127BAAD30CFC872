@@ -1,0 +1,22 @@
+﻿using static GetTempMailORG.TempMail;
+
+namespace GetTempMailORG
+{
+    internal class Program
+    {
+        static void Main(string[] args)
+        {
+            TempMail tempMail = new TempMail();
+
+            Mail? mail = tempMail.GetMail();
+
+            Console.WriteLine($"Email: {mail!.Email}");
+            Console.WriteLine($"Token: {mail!.Token}");
+
+
+            string otp = tempMail.GetOTP(mail.Token!)!;
+
+            Console.ReadLine();
+        }
+    }
+}

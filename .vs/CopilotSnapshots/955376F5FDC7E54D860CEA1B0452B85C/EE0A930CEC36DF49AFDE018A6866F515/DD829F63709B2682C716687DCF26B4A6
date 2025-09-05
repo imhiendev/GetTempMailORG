@@ -1,0 +1,59 @@
+﻿using static GetTempMailORG.TempMail;
+
+namespace GetTempMailORG
+{
+    internal class Program
+    {
+        static async Task Main(string[] args)
+        {
+            Console.WriteLine("🚀 TempMail with Advanced Cloudflare Bypass");
+            Console.WriteLine("============================================\n");
+            
+            using (TempMail tempMail = new TempMail())
+            {
+                try
+                {
+                    Console.WriteLine("📧 Getting temporary email...");
+                    Mail? mail = await tempMail.GetMailAsync();
+
+                    if (mail != null && !string.IsNullOrEmpty(mail.Email) && !string.IsNullOrEmpty(mail.Token))
+                    {
+                        Console.WriteLine($"\n✅ SUCCESS!");
+                        Console.WriteLine($"📨 Email: {mail.Email}");
+                        Console.WriteLine($"🔑 Token: {mail.Token}");
+
+                        Console.WriteLine("\n" + new string('-', 50));
+                        Console.WriteLine("🔍 Monitoring for OTP...");
+                        Console.WriteLine("(Send an email to the address above to test OTP retrieval)");
+                        
+                        string? otp = await tempMail.GetOTPAsync(mail.Token!);
+                        if (!string.IsNullOrEmpty(otp))
+                        {
+                            Console.WriteLine($"\n🎉 OTP RECEIVED: {otp}");
+                        }
+                        else
+                        {
+                            Console.WriteLine("\n⚠️  No OTP received");
+                            Console.WriteLine("💡 Make sure to send an email to the temporary address to receive OTP");
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("\n❌ FAILED - Could not get temporary email");
+                        Console.WriteLine("💡 All bypass methods failed. Cloudflare protection might be too strong.");
+                        Console.WriteLine("💡 Try running again or check if the service is accessible.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"\n💥 EXCEPTION: {ex.Message}");
+                    Console.WriteLine($"📍 Stack trace: {ex.StackTrace}");
+                }
+            }
+
+            Console.WriteLine("\n" + new string('=', 50));
+            Console.WriteLine("🏁 Press any key to exit...");
+            Console.ReadLine();
+        }
+    }
+}

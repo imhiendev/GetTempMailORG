@@ -1,0 +1,109 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net.Http;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+
+namespace GetTempMailORG
+{
+    public class TempMail : IDisposable
+    {
+        public string? _baseUrl = "https://web2.temp-mail.org";
+        private readonly HttpClient httpClient;
+        private bool disposed = false;
+
+        public TempMail()
+        {
+            httpClient = new HttpClient();
+            httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36");
+        }
+
+        public async Task<Mail?> GetMailAsync()
+        {
+            try
+            {
+                var content = new StringContent("", Encoding.UTF8, "application/x-www-form-urlencoded");
+                HttpResponseMessage response = await httpClient.PostAsync($"{_baseUrl}/mailbox", content);
+                
+                if (response.IsSuccessStatusCode)
+                {
+                    string html = await response.Content.ReadAsStringAsync();
+                    string token = Regex.Match(html, "\"token\":\"(.*?)\"").Groups[1].Value;
+                    string email = Regex.Match(html, "\"mailbox\":\"(.*?)\"").Groups[1].Value;
+                    return new Mail { Token = token, Email = email };
+                }
+            }
+            catch (Exception ex)
+            {
+                throw new Exception(ex.Message);
+            }
+            return null;
+        }
+
+        public async Task<string?> GetOTPAsync(string _token)
+        {
+            string? code = "";
+            httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token ?? "");
+            
+            for (int i = 0; i < 10; i++)
+            {
+                try
+                {
+                    HttpResponseMessage response = await httpClient.GetAsync($"{_baseUrl}/messages");
+                    if (response.IsSuccessStatusCode)
+                    {
+                        string html = await response.Content.ReadAsStringAsync();
+                        string otp = Regex.Match(html, "Your OTP is: (.*?)</p>").Groups[1].Value;
+                        if (!string.IsNullOrEmpty(otp))
+                        {
+                            return otp;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    throw new Exception(ex.Message);
+                }
+                await Task.Delay(5000);
+            }
+            return code;
+        }
+
+        // Synchronous wrapper methods for backward compatibility
+        public Mail? GetMail()
+        {
+            return GetMailAsync().GetAwaiter().GetResult();
+        }
+
+        public string? GetOTP(string _token)
+        {
+            return GetOTPAsync(_token).GetAwaiter().GetResult();
+        }
+
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!disposed)
+            {
+                if (disposing)
+                {
+                    httpClient?.Dispose();
+                }
+                disposed = true;
+            }
+        }
+
+        public class Mail
+        {
+            public string? Token { get; set; }
+            public string? Email { get; set; }
+        }
+    }
+}

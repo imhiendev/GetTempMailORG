@@ -1,0 +1,139 @@
+﻿using static GetTempMailORG.TempMail;
+
+namespace GetTempMailORG
+{
+    internal class Program
+    {
+        static async Task Main(string[] args)
+        {
+            Console.WriteLine("=== Testing Multiple Approaches to Bypass Cloudflare ===\n");
+            
+            // Test approach 1: Improved TempMail
+            await TestImprovedApproach();
+            
+            Console.WriteLine("\n" + new string('=', 60) + "\n");
+            
+            // Test approach 2: Postman-like
+            await TestPostmanApproach();
+            
+            Console.WriteLine("\n" + new string('=', 60) + "\n");
+            
+            // Test approach 3: Raw HTTP
+            await TestRawApproach();
+            
+            Console.WriteLine("\nPress any key to exit...");
+            Console.ReadLine();
+        }
+
+        static async Task TestImprovedApproach()
+        {
+            Console.WriteLine("=== Approach 1: Improved Multi-Fallback ===");
+            using (TempMail tempMail = new TempMail())
+            {
+                try
+                {
+                    Mail? mail = await tempMail.GetMailAsync();
+
+                    if (mail != null && !string.IsNullOrEmpty(mail.Email) && !string.IsNullOrEmpty(mail.Token))
+                    {
+                        Console.WriteLine($"✅ SUCCESS - Email: {mail.Email}");
+                        Console.WriteLine($"✅ SUCCESS - Token: {mail.Token}");
+
+                        Console.WriteLine("\n--- Testing OTP retrieval ---");
+                        string? otp = await tempMail.GetOTPAsync(mail.Token!);
+                        if (!string.IsNullOrEmpty(otp))
+                        {
+                            Console.WriteLine($"✅ OTP: {otp}");
+                        }
+                        else
+                        {
+                            Console.WriteLine("⚠️ No OTP received (may need to send email first)");
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("❌ FAILED - Could not get mail");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"❌ FAILED - Exception: {ex.Message}");
+                }
+            }
+        }
+
+        static async Task TestPostmanApproach()
+        {
+            Console.WriteLine("=== Approach 2: Postman Simulation ===");
+            using (TempMailAdvanced tempMail = new TempMailAdvanced())
+            {
+                try
+                {
+                    Mail? mail = await tempMail.GetMailAsync();
+
+                    if (mail != null && !string.IsNullOrEmpty(mail.Email) && !string.IsNullOrEmpty(mail.Token))
+                    {
+                        Console.WriteLine($"✅ SUCCESS - Email: {mail.Email}");
+                        Console.WriteLine($"✅ SUCCESS - Token: {mail.Token}");
+
+                        Console.WriteLine("\n--- Testing OTP retrieval ---");
+                        string? otp = await tempMail.GetOTPAsync(mail.Token!);
+                        if (!string.IsNullOrEmpty(otp))
+                        {
+                            Console.WriteLine($"✅ OTP: {otp}");
+                        }
+                        else
+                        {
+                            Console.WriteLine("⚠️ No OTP received");
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("❌ FAILED - Could not get mail");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"❌ FAILED - Exception: {ex.Message}");
+                }
+            }
+        }
+
+        static async Task TestRawApproach()
+        {
+            Console.WriteLine("=== Approach 3: Raw HTTP ===");
+            using (TempMailRaw tempMail = new TempMailRaw())
+            {
+                try
+                {
+                    Mail? mail = await tempMail.GetMailAsync();
+
+                    if (mail != null && !string.IsNullOrEmpty(mail.Email) && !string.IsNullOrEmpty(mail.Token))
+                    {
+                        Console.WriteLine($"✅ SUCCESS - Email: {mail.Email}");
+                        Console.WriteLine($"✅ SUCCESS - Token: {mail.Token}");
+
+                        Console.WriteLine("\n--- Testing OTP retrieval ---");
+                        string? otp = await tempMail.GetOTPAsync(mail.Token!);
+                        if (!string.IsNullOrEmpty(otp))
+                        {
+                            Console.WriteLine($"✅ OTP: {otp}");
+                        }
+                        else
+                        {
+                            Console.WriteLine("⚠️ No OTP received");
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("❌ FAILED - Could not get mail");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"❌ FAILED - Exception: {ex.Message}");
+                }
+            }
+        }
+    }
+}

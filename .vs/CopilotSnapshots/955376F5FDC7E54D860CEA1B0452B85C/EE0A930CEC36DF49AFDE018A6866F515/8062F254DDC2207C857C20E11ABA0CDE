@@ -1,0 +1,358 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net.Http;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+using System.Net;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
+using System.IO;
+
+namespace GetTempMailORG
+{
+    public class TempMail : IDisposable
+    {
+        public string? _baseUrl = "https://web2.temp-mail.org";
+        private readonly HttpClient httpClient;
+        private readonly CookieContainer cookieContainer;
+        private bool disposed = false;
+
+        public TempMail()
+        {
+            cookieContainer = new CookieContainer();
+            
+            var handler = new HttpClientHandler()
+            {
+                CookieContainer = cookieContainer,
+                UseCookies = true,
+                UseDefaultCredentials = false,
+                UseProxy = false, // Disable proxy detection
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli,
+                
+                // TLS Fingerprinting Bypass
+                ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) => true,
+                SslProtocols = System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13
+            };
+
+            httpClient = new HttpClient(handler);
+            httpClient.Timeout = TimeSpan.FromSeconds(60);
+            
+            // Set default headers to mimic real browser with TLS fingerprinting considerations
+            SetBrowserHeaders();
+        }
+
+        private void SetBrowserHeaders()
+        {
+            httpClient.DefaultRequestHeaders.Clear();
+            
+            // Headers to mimic Chrome with proper TLS fingerprinting
+            httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            httpClient.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
+            httpClient.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.9");
+            httpClient.DefaultRequestHeaders.Add("Accept-Encoding", "gzip, deflate, br");
+            httpClient.DefaultRequestHeaders.Add("Cache-Control", "no-cache");
+            httpClient.DefaultRequestHeaders.Add("Pragma", "no-cache");
+            httpClient.DefaultRequestHeaders.Add("Upgrade-Insecure-Requests", "1");
+            httpClient.DefaultRequestHeaders.Add("DNT", "1");
+            
+            // Modern browser security headers
+            httpClient.DefaultRequestHeaders.Add("sec-ch-ua", "\"Not_A Brand\";v=\"8\", \"Chromium\";v=\"120\", \"Google Chrome\";v=\"120\"");
+            httpClient.DefaultRequestHeaders.Add("sec-ch-ua-mobile", "?0");
+            httpClient.DefaultRequestHeaders.Add("sec-ch-ua-platform", "\"Windows\"");
+            httpClient.DefaultRequestHeaders.Add("Sec-Fetch-Dest", "document");
+            httpClient.DefaultRequestHeaders.Add("Sec-Fetch-Mode", "navigate");
+            httpClient.DefaultRequestHeaders.Add("Sec-Fetch-Site", "none");
+            httpClient.DefaultRequestHeaders.Add("Sec-Fetch-User", "?1");
+        }
+
+        public async Task<Mail?> GetMailAsync()
+        {
+            var attempts = new List<Func<Task<Mail?>>>
+            {
+                () => TryBrowserApproach(),
+                () => TryMinimalApproach(),
+                () => TryPostmanApproach(),
+                () => TryLegacyApproach()
+            };
+
+            foreach (var attempt in attempts)
+            {
+                try
+                {
+                    var result = await attempt();
+                    if (result != null)
+                    {
+                        Console.WriteLine($"✅ Success with approach: {attempt.Method.Name}");
+                        return result;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"❌ {attempt.Method.Name} failed: {ex.Message}");
+                }
+                
+                // Delay between attempts
+                await Task.Delay(2000);
+            }
+
+            return null;
+        }
+
+        private async Task<Mail?> TryBrowserApproach()
+        {
+            Console.WriteLine("🌐 Trying Browser Approach...");
+            
+            SetBrowserHeaders();
+            
+            // Step 1: Visit main page to establish session
+            var mainPageResponse = await httpClient.GetAsync(_baseUrl);
+            Console.WriteLine($"Main page status: {mainPageResponse.StatusCode}");
+            
+            if (mainPageResponse.StatusCode == HttpStatusCode.Forbidden)
+            {
+                throw new Exception("Blocked by Cloudflare");
+            }
+
+            await Task.Delay(3000); // Human-like delay
+
+            // Step 2: Make POST request for mailbox
+            var content = new FormUrlEncodedContent(new Dictionary<string, string>());
+            var response = await httpClient.PostAsync($"{_baseUrl}/mailbox", content);
+            
+            Console.WriteLine($"Browser approach status: {response.StatusCode}");
+            
+            if (response.IsSuccessStatusCode)
+            {
+                string html = await response.Content.ReadAsStringAsync();
+                return ExtractMailData(html, "Browser");
+            }
+            
+            return null;
+        }
+
+        private async Task<Mail?> TryMinimalApproach()
+        {
+            Console.WriteLine("🔧 Trying Minimal Approach...");
+            
+            // Clear all headers and use minimal set
+            httpClient.DefaultRequestHeaders.Clear();
+            httpClient.DefaultRequestHeaders.Add("User-Agent", "curl/7.68.0");
+            httpClient.DefaultRequestHeaders.Add("Accept", "*/*");
+            
+            var response = await httpClient.PostAsync($"{_baseUrl}/mailbox", null);
+            Console.WriteLine($"Minimal approach status: {response.StatusCode}");
+            
+            if (response.IsSuccessStatusCode)
+            {
+                string html = await response.Content.ReadAsStringAsync();
+                return ExtractMailData(html, "Minimal");
+            }
+            
+            return null;
+        }
+
+        private async Task<Mail?> TryPostmanApproach()
+        {
+            Console.WriteLine("📮 Trying Postman Approach...");
+            
+            httpClient.DefaultRequestHeaders.Clear();
+            httpClient.DefaultRequestHeaders.Add("User-Agent", "PostmanRuntime/7.32.3");
+            httpClient.DefaultRequestHeaders.Add("Accept", "*/*");
+            httpClient.DefaultRequestHeaders.Add("Accept-Encoding", "gzip, deflate, br");
+            httpClient.DefaultRequestHeaders.Add("Connection", "keep-alive");
+            
+            var content = new StringContent("", Encoding.UTF8, "application/x-www-form-urlencoded");
+            var response = await httpClient.PostAsync($"{_baseUrl}/mailbox", content);
+            
+            Console.WriteLine($"Postman approach status: {response.StatusCode}");
+            
+            if (response.IsSuccessStatusCode)
+            {
+                string html = await response.Content.ReadAsStringAsync();
+                return ExtractMailData(html, "Postman");
+            }
+            
+            return null;
+        }
+
+        private async Task<Mail?> TryLegacyApproach()
+        {
+            Console.WriteLine("🔄 Trying Legacy Approach...");
+            
+            httpClient.DefaultRequestHeaders.Clear();
+            httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/4.0 (compatible; MSIE 8.0; Windows NT 6.1; WOW64; Trident/4.0)");
+            httpClient.DefaultRequestHeaders.Add("Accept", "text/html, application/xhtml+xml, */*");
+            httpClient.DefaultRequestHeaders.Add("Accept-Language", "en-US");
+            
+            var response = await httpClient.PostAsync($"{_baseUrl}/mailbox", new ByteArrayContent(new byte[0]));
+            Console.WriteLine($"Legacy approach status: {response.StatusCode}");
+            
+            if (response.IsSuccessStatusCode)
+            {
+                string html = await response.Content.ReadAsStringAsync();
+                return ExtractMailData(html, "Legacy");
+            }
+            
+            return null;
+        }
+
+        private Mail? ExtractMailData(string html, string approach)
+        {
+            try
+            {
+                Console.WriteLine($"[{approach}] Response length: {html.Length}");
+                Console.WriteLine($"[{approach}] First 300 chars: {html.Substring(0, Math.Min(300, html.Length))}");
+                
+                // Multiple regex patterns to extract token and email
+                var patterns = new[]
+                {
+                    new { TokenPattern = "\"token\":\"(.*?)\"", EmailPattern = "\"mailbox\":\"(.*?)\"" },
+                    new { TokenPattern = @"token['"":]\s*['""]([^'""]+)['""]", EmailPattern = @"mailbox['"":]\s*['""]([^'""]+)['""]" },
+                    new { TokenPattern = @"data-token=['""]([^'""]+)['""]", EmailPattern = @"data-email=['""]([^'""]+)['""]" },
+                    new { TokenPattern = @"window\.token\s*=\s*['""]([^'""]+)['""]", EmailPattern = @"window\.email\s*=\s*['""]([^'""]+)['""]" }
+                };
+
+                foreach (var pattern in patterns)
+                {
+                    string token = Regex.Match(html, pattern.TokenPattern, RegexOptions.IgnoreCase).Groups[1].Value;
+                    string email = Regex.Match(html, pattern.EmailPattern, RegexOptions.IgnoreCase).Groups[1].Value;
+                    
+                    if (!string.IsNullOrEmpty(token) && !string.IsNullOrEmpty(email))
+                    {
+                        Console.WriteLine($"[{approach}] ✅ Token: {token}");
+                        Console.WriteLine($"[{approach}] ✅ Email: {email}");
+                        return new Mail { Token = token, Email = email };
+                    }
+                }
+                
+                Console.WriteLine($"[{approach}] ❌ No token/email found with any pattern");
+                
+                // Debug: Show more content if patterns failed
+                if (html.Length > 1000)
+                {
+                    Console.WriteLine($"[{approach}] Debug sample: {html.Substring(300, Math.Min(500, html.Length - 300))}");
+                }
+                
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[{approach}] Error extracting data: {ex.Message}");
+            }
+            return null;
+        }
+
+        public async Task<string?> GetOTPAsync(string _token)
+        {
+            if (string.IsNullOrEmpty(_token))
+                return null;
+                
+            Console.WriteLine("📧 Getting OTP...");
+            
+            // Set authorization header
+            httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
+            
+            for (int i = 0; i < 15; i++) // Increased attempts
+            {
+                try
+                {
+                    Console.WriteLine($"OTP attempt {i + 1}/15...");
+                    await Task.Delay(4000); // Slightly reduced delay
+                    
+                    HttpResponseMessage response = await httpClient.GetAsync($"{_baseUrl}/messages");
+                    Console.WriteLine($"Messages API status: {response.StatusCode}");
+                    
+                    if (response.IsSuccessStatusCode)
+                    {
+                        string html = await response.Content.ReadAsStringAsync();
+                        Console.WriteLine($"Messages response length: {html.Length}");
+                        
+                        // Enhanced OTP patterns
+                        string[] otpPatterns = {
+                            @"Your OTP is:?\s*(\d{4,8})",
+                            @"OTP[:\s]*(\d{4,8})",
+                            @"verification code[:\s]*(\d{4,8})",
+                            @"code[:\s]*(\d{4,8})",
+                            @"(\d{6})", // Common 6-digit OTP
+                            @"(\d{4})", // 4-digit OTP
+                            @"(\d{8})", // 8-digit OTP
+                            @">(\d{4,8})<", // OTP in HTML tags
+                            @"(\d{4,8})</p>", // OTP before closing paragraph
+                            @"<code>(\d{4,8})</code>" // OTP in code tags
+                        };
+                        
+                        foreach (var pattern in otpPatterns)
+                        {
+                            var matches = Regex.Matches(html, pattern, RegexOptions.IgnoreCase);
+                            foreach (Match match in matches)
+                            {
+                                string otp = match.Groups[1].Value;
+                                if (!string.IsNullOrEmpty(otp) && otp.Length >= 4 && otp.Length <= 8)
+                                {
+                                    Console.WriteLine($"✅ OTP found: {otp} (pattern: {pattern})");
+                                    return otp;
+                                }
+                            }
+                        }
+                        
+                        Console.WriteLine($"❌ No OTP found in attempt {i + 1}");
+                        
+                        // Debug first response
+                        if (i == 0 && html.Length > 0)
+                        {
+                            Console.WriteLine($"Sample content: {html.Substring(0, Math.Min(200, html.Length))}");
+                        }
+                    }
+                    else
+                    {
+                        string errorContent = await response.Content.ReadAsStringAsync();
+                        Console.WriteLine($"Error getting messages: {response.StatusCode} - {errorContent}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Exception in OTP attempt {i + 1}: {ex.Message}");
+                }
+            }
+            
+            Console.WriteLine("❌ No OTP received after all attempts");
+            return null;
+        }
+
+        // Synchronous wrapper methods for backward compatibility
+        public Mail? GetMail()
+        {
+            return GetMailAsync().GetAwaiter().GetResult();
+        }
+
+        public string? GetOTP(string _token)
+        {
+            return GetOTPAsync(_token).GetAwaiter().GetResult();
+        }
+
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!disposed)
+            {
+                if (disposing)
+                {
+                    httpClient?.Dispose();
+                }
+                disposed = true;
+            }
+        }
+
+        public class Mail
+        {
+            public string? Token { get; set; }
+            public string? Email { get; set; }
+        }
+    }
+}

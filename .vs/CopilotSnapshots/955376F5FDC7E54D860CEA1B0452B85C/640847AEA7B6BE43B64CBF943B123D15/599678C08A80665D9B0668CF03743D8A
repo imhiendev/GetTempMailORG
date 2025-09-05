@@ -1,0 +1,93 @@
+﻿using static GetTempMailORG.TempMail;
+
+namespace GetTempMailORG
+{
+    internal class Program
+    {
+        static async Task Main(string[] args)
+        {
+            Console.WriteLine("=== Testing Browser-like approach ===");
+            await TestBrowserApproach();
+            
+            Console.WriteLine("\n=== Testing Postman-like approach ===");
+            await TestPostmanApproach();
+            
+            Console.WriteLine("\nPress any key to exit...");
+            Console.ReadLine();
+        }
+
+        static async Task TestBrowserApproach()
+        {
+            using (TempMail tempMail = new TempMail())
+            {
+                try
+                {
+                    Console.WriteLine("Attempting to get mail with browser simulation...");
+                    Mail? mail = await tempMail.GetMailAsync();
+
+                    if (mail != null)
+                    {
+                        Console.WriteLine($"✓ Email: {mail.Email}");
+                        Console.WriteLine($"✓ Token: {mail.Token}");
+
+                        Console.WriteLine("\nAttempting to get OTP...");
+                        string? otp = await tempMail.GetOTPAsync(mail.Token!);
+                        if (!string.IsNullOrEmpty(otp))
+                        {
+                            Console.WriteLine($"✓ OTP: {otp}");
+                        }
+                        else
+                        {
+                            Console.WriteLine("✗ No OTP received");
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("✗ Failed to get mail");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"✗ Browser approach failed: {ex.Message}");
+                }
+            }
+        }
+
+        static async Task TestPostmanApproach()
+        {
+            using (TempMailAdvanced tempMail = new TempMailAdvanced())
+            {
+                try
+                {
+                    Console.WriteLine("Attempting to get mail with Postman simulation...");
+                    Mail? mail = await tempMail.GetMailAsync();
+
+                    if (mail != null)
+                    {
+                        Console.WriteLine($"✓ Email: {mail.Email}");
+                        Console.WriteLine($"✓ Token: {mail.Token}");
+
+                        Console.WriteLine("\nAttempting to get OTP...");
+                        string? otp = await tempMail.GetOTPAsync(mail.Token!);
+                        if (!string.IsNullOrEmpty(otp))
+                        {
+                            Console.WriteLine($"✓ OTP: {otp}");
+                        }
+                        else
+                        {
+                            Console.WriteLine("✗ No OTP received");
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("✗ Failed to get mail");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"✗ Postman approach failed: {ex.Message}");
+                }
+            }
+        }
+    }
+}
